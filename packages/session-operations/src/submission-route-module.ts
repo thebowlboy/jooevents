@@ -65,7 +65,7 @@ export const sessionSubmissionRouteChangedDetailSchema = z.strictObject({
   code: z.enum([
     'wrong_scope', 'stale_catalog', 'session_missing', 'stale_session',
     'submission_missing', 'submission_not_accepted', 'submission_already_routed',
-    'submission_has_no_participants', 'origin_changed', 'engagement_advanced',
+    'submission_has_no_participants', 'origin_changed', 'support_changed', 'engagement_advanced',
     'invalid_plan'
   ]),
   submissionId: z.uuid()
@@ -311,7 +311,7 @@ export function createSessionSubmissionRouteOperationModule(
       effectOperations: [{
         ...SESSION_SUBMISSION_ROUTE_OPERATION,
         lifecycle: { status: 'active' as const },
-        summary: 'Attach or restore an accepted submission route.',
+        summary: 'Attach, move, or restore an accepted submission route.',
         effect: 'commit' as const,
         maxRisk: 'low' as const,
         autonomyPolicy: refs.autonomy,
@@ -352,7 +352,9 @@ export function createSessionSubmissionRouteOperationModule(
           autonomyPreflight: refs.preflight,
           history: { summariesByAction: Object.freeze({
             attach_unlinked: 'Attached an accepted submission to a session',
-            restore_route: 'Restored an accepted submission route'
+            restore_route: 'Restored an accepted submission route',
+            move: 'Moved an accepted submission to another session',
+            restore_move: 'Restored an accepted submission move'
           }) }
         },
         bindings: [{

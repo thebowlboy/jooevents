@@ -664,8 +664,11 @@ export function createLiveSchedulePagePort(input: {
 	let servedGeometry: DerivedScheduleGeometry | null = null;
 	/** Includes removed heads returned by this port so receipts can restore exact ids. */
 	const knownBreakHeads = new Map<string, ScheduleBreakHeadView>();
-	/** Exact attach plans retained only for the receipt's immediate guarded restore. */
-	const attachRecoveries = new Map<string, import('@jooevents/contracts').SessionSubmissionAttachPlanDto>();
+	/** Exact route plans retained only for the receipt's immediate guarded restore. */
+	const attachRecoveries = new Map<string,
+		| { readonly kind: 'attach'; readonly plan: import('@jooevents/contracts').SessionSubmissionAttachPlanDto }
+		| { readonly kind: 'move'; readonly plan: import('@jooevents/contracts').SessionSubmissionMovePlanDto }
+	>();
 	const attachRecoveryKey = (sessionId: string, submissionId: string) => `${sessionId}:${submissionId}`;
 	const participantRecoveries = new Map<string, Readonly<{
 		participant: SessionParticipantRefDto;
@@ -1141,22 +1144,54 @@ export function createLiveSchedulePagePort(input: {
 							.filter((email): email is string => email !== undefined)
 					}));
 			},
-			async attachCandidates(): Promise<ScheduleAttachCandidate[]> {
-				// One submission has at most one current origin. The drawer offers
-				// only accepted, currently-unrouted submissions; moving an existing
-				// origin is a distinct guarded operation, never a second attachment.
-				return (await readAttribution())
-					.filter((row) => row.decision === 'accepted' && row.origin === null)
+			async attachCandidates(sessionId): Promise<ScheduleAttachCandidate[]> {
+				const [attribution, catalog] = await Promise.all([readAttribution(), readCatalog()]);
+				const sessionTitles = new Map(catalog.sessions.map((session) => [session.id, session.title]));
+				return attribution
+					.filter((row) => row.decision === 'accepted' && row.origin?.sessionId !== sessionId)
 					.map((row) => ({
 						id: row.id,
 						title: row.title,
-						speakers: [{ name: row.primaryParticipantName }]
+						speakers: [{ name: row.primaryParticipantName }],
+						...(row.origin ? { moveFrom: {
+							sessionId: row.origin.sessionId,
+							sessionTitle: sessionTitles.get(row.origin.sessionId) ?? 'another session'
+						} } : {})
 					}));
 			},
 			async attachSubmission(sessionId: string, submissionId: string): Promise<MutationOutcome> {
-				const catalog = await readCatalog();
+				const [catalog, attribution] = await Promise.all([readCatalog(), readAttribution()]);
 				const session = catalog.sessions.find((head) => head.id === sessionId);
 				if (!session) return { ok: false, reason: 'This session no longer exists.' };
+				const route = attribution.find((row) => row.id === submissionId);
+				if (!route || route.decision !== 'accepted') {
+					return { ok: false, reason: 'This accepted talk is no longer available.' };
+				}
+				if (route.origin) {
+					const source = catalog.sessions.find((head) => head.id === route.origin!.sessionId);
+					if (!source) return { ok: false, reason: 'The talk’s current session no longer exists.' };
+					const applied = await input.attributionMutations.apply({
+						action: 'move',
+						expectedCatalogVersion: catalog.version,
+						expectedCatalogDigestSha256: catalog.digestSha256,
+						submissionId,
+						sourceSessionId: source.id,
+						expectedSourceSessionVersion: source.version,
+						expectedSourceSessionDigestSha256: source.digestSha256,
+						targetSessionId: session.id,
+						expectedTargetSessionVersion: session.version,
+						expectedTargetSessionDigestSha256: session.digestSha256
+					}, newIdempotencyKey());
+					if (applied.kind !== 'success' || applied.data.action !== 'move') {
+						return applied.kind === 'success'
+							? { ok: false, reason: 'The submission move result was incomplete.' }
+							: { ok: false, reason: applyFailure(applied as never, 'submission move').reason };
+					}
+					attachRecoveries.set(attachRecoveryKey(sessionId, submissionId), {
+						kind: 'move', plan: applied.data.recovery
+					});
+					return { ok: true };
+				}
 				const applied = await input.attributionMutations.apply({
 					action: 'attach_unlinked',
 					expectedCatalogVersion: catalog.version,
@@ -1174,17 +1209,41 @@ export function createLiveSchedulePagePort(input: {
 				}
 				attachRecoveries.set(
 					attachRecoveryKey(sessionId, submissionId),
-					applied.data.recovery
+					{ kind: 'attach', plan: applied.data.recovery }
 				);
 				return { ok: true };
 			},
 			async detachSubmission(sessionId: string, submissionId: string): Promise<MutationOutcome> {
 				const key = attachRecoveryKey(sessionId, submissionId);
-				const original = attachRecoveries.get(key);
-				if (!original) {
+				const recovery = attachRecoveries.get(key);
+				if (!recovery) {
 					return { ok: false, reason: 'This attach receipt is no longer current.' };
 				}
 				const catalog = await readCatalog();
+				if (recovery.kind === 'move') {
+					const source = catalog.sessions.find((head) =>
+						head.id === recovery.plan.sourceSession.after.id);
+					const target = catalog.sessions.find((head) =>
+						head.id === recovery.plan.targetSession.after.id);
+					if (!source || !target) return { ok: false, reason: 'One of the moved talk’s sessions no longer exists.' };
+					const applied = await input.attributionMutations.apply({
+						action: 'restore_move',
+						expectedCatalogVersion: catalog.version,
+						expectedCatalogDigestSha256: catalog.digestSha256,
+						expectedSourceSessionVersion: source.version,
+						expectedSourceSessionDigestSha256: source.digestSha256,
+						expectedTargetSessionVersion: target.version,
+						expectedTargetSessionDigestSha256: target.digestSha256,
+						original: recovery.plan
+					}, newIdempotencyKey());
+					if (applied.kind !== 'success' || applied.data.action !== 'restore_move') {
+						return applied.kind === 'success'
+							? { ok: false, reason: 'The move restore result was incomplete.' }
+							: { ok: false, reason: applyFailure(applied as never, 'submission move').reason };
+					}
+					attachRecoveries.delete(key);
+					return { ok: true };
+				}
 				const session = catalog.sessions.find((head) => head.id === sessionId);
 				if (!session) return { ok: false, reason: 'This session no longer exists.' };
 				const applied = await input.attributionMutations.apply({
@@ -1193,7 +1252,7 @@ export function createLiveSchedulePagePort(input: {
 					expectedCatalogDigestSha256: catalog.digestSha256,
 					expectedSessionVersion: session.version,
 					expectedSessionDigestSha256: session.digestSha256,
-					original
+					original: recovery.plan
 				}, newIdempotencyKey());
 				if (applied.kind !== 'success') {
 					return { ok: false, reason: applyFailure(applied as never, 'submission route').reason };

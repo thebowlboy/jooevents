@@ -2635,12 +2635,14 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         newOccurrenceId: () => crypto.randomUUID(),
         newBreakId: () => crypto.randomUUID()
       });
+    const sessionParticipantSupports = decisionRepository.supports;
     const sessionDirectDomain = createSQLiteSessionDirectEffectDomainRegistration({
       sqlite: database.sqlite,
       workspaceId,
       repository: sessionRepository,
       engagements: decisionRepository.engagements,
       lineups: new SQLiteSpeakerLineupRepository(database.sqlite),
+      supports: sessionParticipantSupports,
       eventRelationships,
       newSessionId: () => crypto.randomUUID()
     });
@@ -2650,6 +2652,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         workspaceId,
         sessions: sessionRepository,
         decisions: decisionRepository,
+        supports: sessionParticipantSupports,
         eventRelationships
       });
     const decisionDirectDomain = createSQLiteDecisionDirectEffectDomainRegistration({

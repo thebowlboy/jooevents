@@ -11,6 +11,7 @@ import type { SQLiteOperatorEventRelationshipSource } from './operator-authority
 import type { SQLiteEngagementRepository } from './engagement';
 import type { SQLiteSessionRepository } from './session';
 import type { SQLiteSpeakerLineupRepository } from './speaker-lineup';
+import type { SQLiteSessionParticipantSupportRepository } from './session-participant-support';
 
 const same = (a: { readonly key: string; readonly version: number }, b: { readonly key: string; readonly version: number }) => a.key === b.key && a.version === b.version;
 const exact = (context: EffectInvocationContext) => context.scope.eventId !== undefined && context.scope.subjects.length === 2
@@ -25,6 +26,7 @@ export class SQLiteSessionDirectEffectDomainAdapter implements SQLiteEffectDomai
     readonly repository: SQLiteSessionRepository;
     readonly engagements: SQLiteEngagementRepository;
     readonly lineups: SQLiteSpeakerLineupRepository;
+    readonly supports: SQLiteSessionParticipantSupportRepository;
     readonly eventRelationships: SQLiteOperatorEventRelationshipSource;
     readonly newSessionId: () => string;
   }) {
@@ -76,14 +78,14 @@ export class SQLiteSessionDirectEffectDomainAdapter implements SQLiteEffectDomai
             target.id,
             wire.personId
           );
-          const source = existing?.source ?? Object.freeze({
+          const source = Object.freeze({
             kind: 'organizer', id: actorUserId, version: 1
           });
           const engagementInvite = planEngagementRosterInviteFrom(this.input.engagements, {
             scope,
             sessionId: target.id,
             personId: wire.personId,
-            source,
+            source: existing?.source ?? source,
             invitedAt: occurredAt,
             respondBy: null
           });
@@ -108,7 +110,23 @@ export class SQLiteSessionDirectEffectDomainAdapter implements SQLiteEffectDomai
             catalog,
             vocabulary: this.input.repository.readSessionVocabulary(scope)!
           });
-          const plan = sessionParticipantAddExistingPlanSchema.parse({ sessionPlan, engagementInvite });
+          const support = Object.freeze({
+            schemaVersion: 1 as const,
+            scope,
+            sessionId: target.id,
+            personId: wire.personId,
+            kind: 'editorial' as const,
+            source
+          });
+          const existingSupport = this.input.supports.readParticipantSupport(
+            scope, target.id, wire.personId, { kind: 'editorial', source }
+          );
+          const plan = sessionParticipantAddExistingPlanSchema.parse({
+            sessionPlan,
+            engagementInvite,
+            support,
+            supportChanges: { remove: [], insert: existingSupport ? [] : [support] }
+          });
           return sessionDirectContributionSchema.parse({
             result: { kind: 'success', data: {
               action: 'roster_add_existing',
@@ -168,6 +186,7 @@ export class SQLiteSessionDirectEffectDomainAdapter implements SQLiteEffectDomai
       const plan = sessionParticipantAddExistingPlanSchema.parse((contribution as any).plan);
       this.input.repository.applySessionPlan(plan.sessionPlan);
       applyEngagementRosterInviteFrom(this.input.engagements, plan.engagementInvite);
+      this.input.supports.applyParticipantSupportChanges(plan.supportChanges);
       return;
     }
     if ((contribution as any)?.kind !== 'session_direct_change') throw new TypeError('session_direct_contribution_invalid');

@@ -103,7 +103,7 @@ export const SQLITE_E2_S12_RELEASE_FLOOR: SQLiteReleaseFloor = Object.freeze({
   minimumRunnerVersion: 2
 });
 
-/** Current terminal floor; sequences 6 through 12 remain supported predecessors. */
+/** Retained predecessor floor for installations frozen at sequence 13. */
 export const SQLITE_E2_S13_RELEASE_FLOOR: SQLiteReleaseFloor = Object.freeze({
   releaseFloorId: 'sqlite-e2-s13',
   terminalMigration: Object.freeze({
@@ -113,5 +113,18 @@ export const SQLITE_E2_S13_RELEASE_FLOOR: SQLiteReleaseFloor = Object.freeze({
   }),
   expectedApplicationFingerprint: '9736ab6b751b4d35f4be77f2e0e0059cd1887c67e9143c166ad273615d42d32e',
   expectedFullFingerprint: '70370395491758d3fb53aeda10a4425f88bcf6bce18952e136cab05ba3f32868',
+  minimumRunnerVersion: 2
+});
+
+/** Current terminal floor; sequences 6 through 13 remain supported predecessors. */
+export const SQLITE_E2_S14_RELEASE_FLOOR: SQLiteReleaseFloor = Object.freeze({
+  releaseFloorId: 'sqlite-e2-s14',
+  terminalMigration: Object.freeze({
+    migrationId: 'e2_0014_session_participant_support',
+    schemaEpoch: 2,
+    sequence: 14
+  }),
+  expectedApplicationFingerprint: 'fcb4d66ff34bff361646f71f0d3cb72446c3f593de013511a37f88e92f843505',
+  expectedFullFingerprint: '5f11206acd9fcea231502ee888da423b69be30997ffb47ed8d197245f590c2f3',
   minimumRunnerVersion: 2
 });

@@ -1119,7 +1119,9 @@
 		if (outcome.ok) {
 			recordAction({
 				area: 'schedule',
-				label: `Attached “${submission.title}” to “${session.title}”`,
+				label: submission.moveFrom
+					? `Moved “${submission.title}” from “${submission.moveFrom.sessionTitle}” to “${session.title}”`
+					: `Attached “${submission.title}” to “${session.title}”`,
 				undo: async () => {
 					await api.schedule.detachSubmission(session.id, submission.id);
 				}
@@ -2477,15 +2479,17 @@
 								<p class="speakers__name">
 									{submission.speakers.map((speaker) => speaker.name).join(', ')}
 								</p>
-								<p class="speakers__provenance">accepted — “{submission.title}”</p>
+					<p class="speakers__provenance">
+						accepted — “{submission.title}”{submission.moveFrom ? ` · currently in “${submission.moveFrom.sessionTitle}”` : ''}
+					</p>
 							</div>
 							<button
 								type="button"
 								class="ui-button ui-button--secondary ui-button--sm speakers__action"
 								disabled={attributing}
-								aria-label={`Add “${submission.title}” to “${session.title}”`}
+					aria-label={`${submission.moveFrom ? 'Move' : 'Add'} “${submission.title}” to “${session.title}”`}
 								onclick={() => attach(session, submission)}>
-								{submission.speakers.length === 1 ? 'Add' : `Add ${submission.speakers.length}`}
+					{submission.moveFrom ? 'Move' : submission.speakers.length === 1 ? 'Add' : `Add ${submission.speakers.length}`}
 							</button>
 						</li>
 					{/each}

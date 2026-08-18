@@ -1394,8 +1394,8 @@ describe('ephemeral live Foundation server composition', () => {
     expect(runtime.database.installedSchemaArtifacts).toEqual([]);
     expect(runtime.database.retainedBaseline).toMatchObject({
       status: 'current',
-	  coordinate: { schemaEpoch: 2, sequence: 13 },
-	  migrationId: 'e2_0013_speaker_profiles',
+	  coordinate: { schemaEpoch: 2, sequence: 14 },
+	  migrationId: 'e2_0014_session_participant_support',
       databaseClass: 'ephemeral'
     });
     expect(runtime.database.sqlite.query<{ readonly name: string }, []>(`
@@ -1500,6 +1500,11 @@ describe('ephemeral live Foundation server composition', () => {
        WHERE submission_id = ?
     `).run(repair.submissionId);
     expect(unlinked.changes).toBe(1);
+    const unsupported = runtime.database.sqlite.query(`
+      DELETE FROM session_participant_supports
+       WHERE support_kind = 'submission' AND support_key = ?
+    `).run(repair.submissionId);
+    expect(unsupported.changes).toBe(1);
 
     const beforeRead = sessionCatalogReadResultSchema.parse(await (
       await runtime.app.request('/api/events/current/sessions', {
@@ -1542,6 +1547,10 @@ describe('ephemeral live Foundation server composition', () => {
     expect(runtime.database.sqlite.query<{ readonly count: number }, [string, string]>(`
       SELECT count(*) AS count FROM engagement_heads WHERE session_id = ? AND person_id = ?
     `).get(target.sessionId, repair.personId)?.count).toBe(1);
+    expect(runtime.database.sqlite.query<{ readonly count: number }, [string]>(`
+      SELECT count(*) AS count FROM session_participant_supports
+       WHERE support_kind = 'submission' AND support_key = ?
+    `).get(repair.submissionId)?.count).toBe(1);
 
     const currentRead = sessionCatalogReadResultSchema.parse(await (
       await runtime.app.request('/api/events/current/sessions', {
@@ -1581,6 +1590,122 @@ describe('ephemeral live Foundation server composition', () => {
     expect(runtime.database.sqlite.query<{ readonly count: number }, [string]>(`
       SELECT count(*) AS count FROM submission_session_origins WHERE submission_id = ?
     `).get(repair.submissionId)?.count).toBe(0);
+    expect(runtime.database.sqlite.query<{ readonly count: number }, [string]>(`
+      SELECT count(*) AS count FROM session_participant_supports
+       WHERE support_kind = 'submission' AND support_key = ?
+    `).get(repair.submissionId)?.count).toBe(0);
+  });
+
+  test('moves an accepted Submission between Sessions and restores its exact support', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    await provisionOwner(runtime, session);
+    const seeded = await seedAcceptedSpeakers({
+      runtime,
+      session,
+      key: 'session-route-move',
+      speakers: [
+        { key: 'target', title: 'Target panel', name: 'Ada', email: 'ada@example.test' },
+        { key: 'moving', title: 'Moving talk', name: 'Grace', email: 'grace@example.test' }
+      ]
+    });
+    const target = seeded[0]!;
+    const moving = seeded[1]!;
+    const beforeRead = sessionCatalogReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/sessions', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (beforeRead.kind !== 'success') throw new Error('Session catalog read failed.');
+    const sourceBefore = beforeRead.data.sessions.find((head) => head.id === moving.sessionId)!;
+    const targetBefore = beforeRead.data.sessions.find((head) => head.id === target.sessionId)!;
+
+    const moved = sessionSubmissionRouteOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/session-submission-routes',
+      key: 'session-route-move-commit',
+      body: {
+        action: 'move',
+        expectedCatalogVersion: beforeRead.data.version,
+        expectedCatalogDigestSha256: beforeRead.data.digestSha256,
+        submissionId: moving.submissionId,
+        sourceSessionId: moving.sessionId,
+        expectedSourceSessionVersion: sourceBefore.version,
+        expectedSourceSessionDigestSha256: sourceBefore.digestSha256,
+        targetSessionId: target.sessionId,
+        expectedTargetSessionVersion: targetBefore.version,
+        expectedTargetSessionDigestSha256: targetBefore.digestSha256
+      },
+      parse: (value) => value
+    }));
+    expect(moved).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'move',
+        sourceSession: { id: moving.sessionId, roster: { participants: [] } },
+        targetSession: { id: target.sessionId, roster: { participants: [
+          { personId: target.personId }, { personId: moving.personId }
+        ] } },
+        origin: { submissionId: moving.submissionId, sessionId: target.sessionId }
+      },
+      receipt: { operationName: 'session.submission.route', operationVersion: 1 }
+    });
+    if (moved.kind !== 'success' || moved.data.action !== 'move') {
+      throw new Error('Move route failed.');
+    }
+    expect(runtime.database.sqlite.query<{ readonly session_id: string }, [string]>(`
+      SELECT session_id FROM session_participant_supports
+       WHERE support_kind = 'submission' AND support_key = ?
+    `).get(moving.submissionId)).toEqual({ session_id: target.sessionId });
+
+    const currentRead = sessionCatalogReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/sessions', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (currentRead.kind !== 'success') throw new Error('Session catalog reread failed.');
+    const sourceCurrent = currentRead.data.sessions.find((head) => head.id === moving.sessionId)!;
+    const targetCurrent = currentRead.data.sessions.find((head) => head.id === target.sessionId)!;
+    const restored = sessionSubmissionRouteOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/session-submission-routes',
+      key: 'session-route-move-restore',
+      body: {
+        action: 'restore_move',
+        expectedCatalogVersion: currentRead.data.version,
+        expectedCatalogDigestSha256: currentRead.data.digestSha256,
+        expectedSourceSessionVersion: sourceCurrent.version,
+        expectedSourceSessionDigestSha256: sourceCurrent.digestSha256,
+        expectedTargetSessionVersion: targetCurrent.version,
+        expectedTargetSessionDigestSha256: targetCurrent.digestSha256,
+        original: moved.data.recovery
+      },
+      parse: (value) => value
+    }));
+    expect(restored).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'restore_move',
+        sourceSession: { id: moving.sessionId, roster: { participants: [
+          { personId: moving.personId }
+        ] } },
+        targetSession: { id: target.sessionId, roster: { participants: [
+          { personId: target.personId }
+        ] } },
+        origin: { submissionId: moving.submissionId, sessionId: moving.sessionId },
+        recovery: null
+      }
+    });
+    expect(runtime.database.sqlite.query<{ readonly session_id: string }, [string]>(`
+      SELECT session_id FROM session_participant_supports
+       WHERE support_kind = 'submission' AND support_key = ?
+    `).get(moving.submissionId)).toEqual({ session_id: moving.sessionId });
+    expect(runtime.database.sqlite.query<{ readonly count: number }, [string, string]>(`
+      SELECT count(*) AS count FROM engagement_heads WHERE session_id = ? AND person_id = ?
+    `).get(target.sessionId, moving.personId)?.count).toBe(0);
   });
 
   test('configures and downloads an Accelevents package through the live one-way boundary', async () => {

@@ -22,6 +22,7 @@ export interface ScheduleAttachCandidate {
 	readonly id: string;
 	readonly title: string;
 	readonly speakers: readonly { readonly name: string }[];
+	readonly moveFrom?: { readonly sessionId: string; readonly sessionTitle: string };
 }
 
 /** Factual capabilities consumed by the tuned schedule board and session drawers. */

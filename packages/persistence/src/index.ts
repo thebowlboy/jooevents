@@ -18,6 +18,7 @@ export * from './sqlite/deadline-direct-effect-domain';
 export * from './sqlite/task-direct-effect-domain';
 export * from './sqlite/session-direct-effect-domain';
 export * from './sqlite/session-submission-route-effect-domain';
+export * from './sqlite/session-participant-support';
 export * from './sqlite/schedule-placement-direct-effect-domain';
 export * from './sqlite/submission-triage-direct-effect-domain';
 export * from './sqlite/intake-direct-entry-effect-domain';

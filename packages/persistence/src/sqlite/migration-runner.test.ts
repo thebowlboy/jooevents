@@ -199,11 +199,11 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
         participants: [
           {
             personId: personA, role: 'speaker', publiclyVisible: true,
-            source: { kind: 'submission', id: submissionA, version: 1 }
+            source: { kind: 'organizer', id: userId, version: 1 }
           },
           {
             personId: personB, role: 'speaker', publiclyVisible: false,
-            source: { kind: 'submission', id: submissionA, version: 1 }
+            source: { kind: 'organizer', id: userId, version: 1 }
           }
         ]
       }
@@ -224,7 +224,7 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
         lifecycle: 'collecting', formatId, trackId,
         participants: [{
           personId: personA, role: 'panelist', publiclyVisible: true,
-          source: { kind: 'submission', id: submissionB, version: 1 }
+          source: { kind: 'organizer', id: userId, version: 1 }
         }]
       }
     });
@@ -261,8 +261,8 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     opened.push(upgraded);
     expect(upgraded.migration).toMatchObject({
       status: 'applied',
-      migrationId: 'e2_0013_speaker_profiles',
-      coordinate: { schemaEpoch: 2, sequence: 13 }
+      migrationId: 'e2_0014_session_participant_support',
+      coordinate: { schemaEpoch: 2, sequence: 14 }
     });
     expect(upgraded.sqlite.query<{ slot_kind: string; item_id: string; version: number }, []>(`
       SELECT slot_kind,item_id,version FROM session_program_reference_slots
@@ -438,8 +438,8 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     const migrated = openSQLite(path, { migrationPolicy: 'apply' });
     opened.push(migrated);
     expect(migrated.migration).toMatchObject({
-      status: 'applied', migrationId: 'e2_0013_speaker_profiles',
-      coordinate: { schemaEpoch: 2, sequence: 13 }
+      status: 'applied', migrationId: 'e2_0014_session_participant_support',
+      coordinate: { schemaEpoch: 2, sequence: 14 }
     });
     expect(migrated.sqlite.query<{ readonly expires_at_ms: number | null }, [string]>(
       'SELECT expires_at_ms FROM api_keys WHERE api_key_id = ?'

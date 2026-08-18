@@ -7,6 +7,7 @@ import {
   SQLITE_E2_S11_RELEASE_FLOOR,
   SQLITE_E2_S12_RELEASE_FLOOR,
   SQLITE_E2_S13_RELEASE_FLOOR,
+  SQLITE_E2_S14_RELEASE_FLOOR,
   type SQLiteMigrationReference,
   type SQLiteReleaseFloor
 } from './release-floor-contract';
@@ -143,6 +144,12 @@ const speakerProfiles = Object.freeze({
   migrationId: 'e2_0013_speaker_profiles',
   schemaEpoch: 2,
   sequence: 13
+});
+
+const sessionParticipantSupport = Object.freeze({
+  migrationId: 'e2_0014_session_participant_support',
+  schemaEpoch: 2,
+  sequence: 14
 });
 
 /** Exact public epoch-2 baseline plus the sole known retained epoch-1 lineage. */
@@ -290,14 +297,24 @@ export const SQLITE_MIGRATION_MANIFEST: SQLiteMigrationManifest = Object.freeze(
       dependsOn: scheduleBreaks,
       expectedBeforeApplicationFingerprint: '9b57c4471b0ac2bc8e665b4ad634a1646a1f93073665f76b3f03a479d266048b',
       expectedAfterApplicationFingerprint: '9736ab6b751b4d35f4be77f2e0e0059cd1887c67e9143c166ad273615d42d32e'
+    }),
+    Object.freeze({
+      ...sessionParticipantSupport,
+      dialect: 'sqlite' as const,
+      artifact: new URL('../../migrations/sqlite/e2_0014_session_participant_support.sql', import.meta.url),
+      checksumSha256: '18a090f3d3139259ecb28c79103a60105efc82e47995b00a479c56b8508694fd',
+      atomicity: 'transactional' as const,
+      dependsOn: speakerProfiles,
+      expectedBeforeApplicationFingerprint: '9736ab6b751b4d35f4be77f2e0e0059cd1887c67e9143c166ad273615d42d32e',
+      expectedAfterApplicationFingerprint: 'fcb4d66ff34bff361646f71f0d3cb72446c3f593de013511a37f88e92f843505'
     })
   ]) as readonly [SQLiteMigrationManifestEntry, ...SQLiteMigrationManifestEntry[]],
   expectedEmptyApplicationFingerprint: 'e3ded6858faee915d966f4bcaf5b768070aaaa4d5f1021ac04c713440106b89d',
-  expectedCurrentApplicationFingerprint: '9736ab6b751b4d35f4be77f2e0e0059cd1887c67e9143c166ad273615d42d32e',
-  expectedCurrentFullFingerprint: '70370395491758d3fb53aeda10a4425f88bcf6bce18952e136cab05ba3f32868',
+  expectedCurrentApplicationFingerprint: 'fcb4d66ff34bff361646f71f0d3cb72446c3f593de013511a37f88e92f843505',
+  expectedCurrentFullFingerprint: '5f11206acd9fcea231502ee888da423b69be30997ffb47ed8d197245f590c2f3',
   dictionary: Object.freeze({
-    artifact: new URL('../../migrations/sqlite/checkpoints/e2_0013_speaker_profiles.schema.json', import.meta.url),
-    checksumSha256: '9736ab6b751b4d35f4be77f2e0e0059cd1887c67e9143c166ad273615d42d32e'
+    artifact: new URL('../../migrations/sqlite/checkpoints/e2_0014_session_participant_support.schema.json', import.meta.url),
+    checksumSha256: 'fcb4d66ff34bff361646f71f0d3cb72446c3f593de013511a37f88e92f843505'
   }),
   releaseFloors: Object.freeze([
     SQLITE_E2_S6_RELEASE_FLOOR,
@@ -307,7 +324,8 @@ export const SQLITE_MIGRATION_MANIFEST: SQLiteMigrationManifest = Object.freeze(
     SQLITE_E2_S10_RELEASE_FLOOR,
     SQLITE_E2_S11_RELEASE_FLOOR,
     SQLITE_E2_S12_RELEASE_FLOOR,
-    SQLITE_E2_S13_RELEASE_FLOOR
+    SQLITE_E2_S13_RELEASE_FLOOR,
+    SQLITE_E2_S14_RELEASE_FLOOR
   ]) as readonly [SQLiteReleaseFloor, ...SQLiteReleaseFloor[]],
   acceptedPredecessorLineages: Object.freeze([Object.freeze({
     transitionId: 'e1_identity_access_to_e2_foundation',

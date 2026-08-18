@@ -241,6 +241,16 @@ export function planSessionMutation(input: {
     before = existing;
     const participants = reorderedRosterParticipants(existing.roster.participants, planningInput.personIds);
     after = changedRosterHead(existing, participants, planningInput.actorUserId, planningInput.occurredAt);
+  } else if (planningInput.action === 'roster_reconcile') {
+    if (!existing) throw new SessionPlanningError('session_missing');
+    requireExactSessionAndRoster(existing, planningInput);
+    before = existing;
+    after = changedRosterHead(
+      existing,
+      planningInput.participants,
+      planningInput.actorUserId,
+      planningInput.occurredAt
+    );
   } else if (planningInput.action === 'retarget') {
     if (!existing) throw new SessionPlanningError('session_missing');
     if (existing.version !== planningInput.expectedSessionVersion

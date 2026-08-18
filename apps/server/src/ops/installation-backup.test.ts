@@ -80,7 +80,7 @@ function createSyntheticRelease(root: string): void {
     bunVersion: Bun.version,
     platform: process.platform,
     architecture: process.arch,
-		sqliteReleaseFloor: 'sqlite-e2-s13',
+		sqliteReleaseFloor: 'sqlite-e2-s14',
     liveBuildDigestSha256: live.digestSha256,
     sourceFiles,
     sourceDigestSha256: sha256(JSON.stringify(sourceFiles))
