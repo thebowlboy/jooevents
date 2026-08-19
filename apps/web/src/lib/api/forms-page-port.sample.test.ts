@@ -36,5 +36,7 @@ describe('sample tuned Forms page port', () => {
 		}];
 		expect(await port.forms.setRules(form.id, rules)).toEqual({ ok: true });
 		expect(await port.forms.rules(form.id)).toEqual(rules);
+		expect(await port.forms.setRules(form.id, [])).toEqual({ ok: true });
+		expect(await port.forms.rules(form.id)).toEqual([]);
 	});
 });

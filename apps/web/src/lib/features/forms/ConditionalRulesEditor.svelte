@@ -81,6 +81,20 @@
 		};
 	}
 
+	async function commit(next: FormRuleAuthorInput[], successNote: string): Promise<void> {
+		if (saving) return;
+		saving = true;
+		try {
+			const outcome = await onSave(next);
+			if (outcome.ok) reset();
+			note = outcome.ok ? successNote : outcome.reason;
+		} catch {
+			note = 'This change could not be finished. Reload and try again.';
+		} finally {
+			saving = false;
+		}
+	}
+
 	async function save(event: SubmitEvent): Promise<void> {
 		event.preventDefault();
 		const rule = authoredRule();
@@ -88,20 +102,15 @@
 		const next = [...rules];
 		if (editing === null) next.push(rule);
 		else next[editing] = rule;
-		saving = true;
-		const outcome = await onSave(next);
-		saving = false;
-		if (outcome.ok) reset();
-		note = outcome.ok ? 'Rule saved.' : outcome.reason;
+		await commit(next, 'Rule saved.');
 	}
 
 	async function remove(index: number): Promise<void> {
 		if (saving) return;
-		saving = true;
-		const outcome = await onSave(rules.filter((_, ruleIndex) => ruleIndex !== index));
-		saving = false;
-		if (outcome.ok) reset();
-		note = outcome.ok ? 'Rule removed.' : outcome.reason;
+		await commit(
+			rules.filter((_, ruleIndex) => ruleIndex !== index),
+			'Rule removed.'
+		);
 	}
 
 	const previewAnswers = $derived.by((): TransientApplicationAnswerInput[] => {
@@ -147,7 +156,9 @@
 						{rule.effect.targetFieldIds.length} {rule.effect.targetFieldIds.length === 1 ? 'question' : 'questions'}</span>
 					<span class="rules__actions">
 						<Button variant="ghost" size="sm" disabled={disabled || saving} onclick={() => edit(index)}>Edit</Button>
-						<Button variant="ghost" size="sm" disabled={disabled || saving} onclick={() => void remove(index)}>Remove</Button>
+						<Button variant="ghost" size="sm" disabled={disabled || saving} loading={saving}
+							aria-label={`Remove the rule on ${sourceRow?.field.label ?? 'this question'}`}
+							onclick={() => void remove(index)}>Remove</Button>
 					</span>
 				</li>
 			{/each}

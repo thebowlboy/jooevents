@@ -478,3 +478,29 @@ test('the lifecycle walks forward beside the close date: open, close, reopen', a
 	await expect(receiptOf(page, 'Reopened “Lifecycle rehearsal”')).toBeVisible({ timeout: 10000 });
 	await expect(page.locator('.conf__title')).toContainText('Open');
 });
+
+test('removing a conditional rule finishes and leaves the editor usable', async ({ page }) => {
+	await openConfigurator(page, 'form-cfp', 'Call for Proposals');
+	const editor = page.getByRole('region', { name: 'Conditional questions' });
+	await expect(editor).toBeVisible({ timeout: 15000 });
+
+	await editor.getByLabel('Source question').selectOption({
+		label: 'I agree to the code of conduct and to my session being recorded if accepted'
+	});
+	await editor.getByRole('checkbox', { name: 'Talk title' }).check();
+	await editor.getByRole('button', { name: 'Add rule' }).click();
+	await expect(editor.getByText('Rule saved.')).toBeVisible({ timeout: 10000 });
+
+	const remove = editor.getByRole('button', { name: /Remove the rule/ });
+	await expect(remove).toBeVisible();
+	await remove.click();
+	await expect(editor.getByText('Rule removed.')).toBeVisible({ timeout: 10000 });
+	await expect(editor.getByRole('button', { name: /Remove the rule/ })).toHaveCount(0);
+	const source = editor.getByLabel('Source question');
+	await expect(source).toBeEnabled();
+	await source.selectOption({
+		label: 'I agree to the code of conduct and to my session being recorded if accepted'
+	});
+	await editor.getByRole('checkbox', { name: 'Talk title' }).check();
+	await expect(editor.getByRole('button', { name: 'Add rule' })).toBeEnabled();
+});

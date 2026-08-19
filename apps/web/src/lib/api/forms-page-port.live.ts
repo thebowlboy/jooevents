@@ -268,7 +268,10 @@ export function createLiveFormsPagePort(input: {
 			if (error instanceof FormsPageLiveAdapterError) {
 				return { ok: false, reason: error.message };
 			}
-			throw error;
+			return {
+				ok: false,
+				reason: 'This form change could not be applied.'
+			};
 		}
 	}
 

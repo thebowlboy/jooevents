@@ -189,6 +189,18 @@ describe('live tuned Forms page adapter', () => {
 		expect(await adapter.forms.setRules(formId, rules)).toEqual({ ok: true });
 		expect(await adapter.forms.rules(formId)).toEqual(rules);
 		expect((await adapter.forms.get(formId))?.version).toBe((before?.version ?? 0) + 1);
+		expect(await adapter.forms.setRules(formId, [])).toEqual({ ok: true });
+		expect(await adapter.forms.rules(formId)).toEqual([]);
+	});
+
+	test('rule writes return a mutation outcome instead of throwing through the page', async () => {
+		const adapter = port(liveForms({
+			async revise() { throw new TypeError('rule_write_failed'); }
+		}));
+		expect(await adapter.forms.setRules(intakeFormsFixtureIds.openForm, [])).toEqual({
+			ok: false,
+			reason: 'This form change could not be applied.'
+		});
 	});
 
 	test('keeps publication inert until a second press with a distinct stable key', async () => {

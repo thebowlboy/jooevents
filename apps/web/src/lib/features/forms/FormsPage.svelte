@@ -407,18 +407,31 @@
 		if (!form || pending) return { ok: false, reason: 'Another form change is still finishing.' } as const;
 		const target = form;
 		begin('rules');
-		const outcome = await port.forms.setRules(target.id, next);
-		if (outcome.ok) {
-			await reloadAll({ resetDraft: true });
-			message = 'Updated the conditional questions.';
-			recordAction({
-				area: 'forms',
-				label: `Updated conditional questions for ${target.name}`,
-				notUndoableReason: 'Edit the current rules and save another change'
-			});
-		} else message = outcome.reason;
-		pending = '';
-		return outcome;
+		try {
+			const outcome = await port.forms.setRules(target.id, next);
+			if (outcome.ok) {
+				rules = next.map((rule) => structuredClone(rule));
+				try {
+					await reloadAll({ resetDraft: true });
+				} catch {
+					// The write committed. Keep the authored rules on screen if the
+					// follow-up read fails, instead of leaving Remove spinning.
+				}
+				message = 'Updated the conditional questions.';
+				recordAction({
+					area: 'forms',
+					label: `Updated conditional questions for ${target.name}`,
+					notUndoableReason: 'Edit the current rules and save another change'
+				});
+			} else message = outcome.reason;
+			return outcome;
+		} catch {
+			const reason = 'This change could not be finished. Reload and try again.';
+			message = reason;
+			return { ok: false as const, reason };
+		} finally {
+			pending = '';
+		}
 	}
 
 	/** Re-reads the open form and the card list; also the refresh hook a receipt's undo calls. */
@@ -852,23 +865,32 @@
 		const keep = $state.snapshot(view.row.field) as RegistryField;
 		const index = keep.position;
 		begin(`remove-${keep.id}`);
-		refusals = clearRefusal(refusals, keep.id);
-		const outcome = await port.fields.remove(keep.id);
-		if (outcome.ok) {
-			await reloadAll();
-			recordAction({
-				area: 'forms',
-				label: `Removed the “${keep.label}” question`,
-				undo: async () => {
-					await port.fields.restore(keep, index);
+		try {
+			refusals = clearRefusal(refusals, keep.id);
+			const outcome = await port.fields.remove(keep.id);
+			if (outcome.ok) {
+				try {
 					await reloadAll();
+				} catch {
+					// The field is gone; don't leave Remove in its loading state.
 				}
-			});
-		} else {
-			refusals = { ...refusals, [keep.id]: outcome.reason };
-			message = outcome.reason;
+				recordAction({
+					area: 'forms',
+					label: `Removed the “${keep.label}” question`,
+					undo: async () => {
+						await port.fields.restore(keep, index);
+						await reloadAll();
+					}
+				});
+			} else {
+				refusals = { ...refusals, [keep.id]: outcome.reason };
+				message = outcome.reason;
+			}
+		} catch {
+			message = 'This change could not be finished. Reload and try again.';
+		} finally {
+			pending = '';
 		}
-		pending = '';
 	}
 
 	// -----------------------------------------------------------------------
